@@ -1,0 +1,24 @@
+# Core LangChain ecosystem
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-experimental>=0.3.0
+langchain-openai>=0.2.0
+langchain-anthropic>=0.2.0
+langgraph>=0.2.0
+
+# Neo4j
+neo4j>=5.0.0
+langchain-neo4j>=0.1.0
+
+# Embeddings
+tiktoken>=0.5.0
+
+# Environment and utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# UI
+streamlit>=1.37.0
+
+# Markdown processing
+unstructured>=0.10.0

@@ -14,7 +14,9 @@ This project parses strategic Product Marketing markdown files and converts them
 **Key Features:**
 - **Structured Extraction**: LLM extracts entities and relationships following a strict ontology
 - **Hybrid Retrieval**: Combines vector similarity search with graph traversal
-- **Interactive Chat**: Streamlit UI with retrieval transparency (shows query rewriting, entities, relationships)
+- **Multi-turn Conversations**: Maintains chat history for contextual follow-ups and pronoun resolution
+- **Response Modes**: Configurable verbosity (concise/standard/detailed)
+- **Interactive Chat**: Streamlit UI with retrieval transparency (shows query analysis, entities, relationships)
 
 ## Architecture
 
@@ -25,10 +27,10 @@ Streamlit UI ← LangGraph Agent ← Hybrid Retrieval
 ```
 
 **LangGraph Pipeline:**
-1. **Query Rewriter** - Optimizes question for retrieval
+1. **Query Analyzer** - Rewrites query, extracts entities, classifies query type (single LLM call)
 2. **Vector Search** - Finds semantically similar document chunks
-3. **Graph Traversal** - Expands context via relationship hops
-4. **Synthesizer** - Generates answer from combined context
+3. **Graph Traversal** - Adaptive hops based on query type (1-hop factual, 2-hop exploratory)
+4. **Synthesizer** - Generates answer with response mode support
 
 ## Knowledge Graph Schema
 
@@ -114,6 +116,10 @@ Open http://localhost:8501
 - "What is the Moments API and what does it enable?"
 - "What causes fragmentation in Marketing execution?"
 - "How does the Real-Time Layer work?"
+
+**Multi-turn Example:**
+1. Ask: "What problems do Data Teams face?"
+2. Follow up: "How does Tealium solve that?" (resolves "that" from context)
 
 ## Project Structure
 

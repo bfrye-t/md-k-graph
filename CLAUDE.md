@@ -107,23 +107,45 @@ python3 -c "from src.ingestion import load_markdown_files, chunk_documents; docs
 
 ## LangGraph Agent Pipeline
 
-The agent (`src/agent.py`) is a 4-node state machine:
+The agent (`src/agent.py`) is a 4-node state machine with multi-turn conversation support:
 
-1. **rewrite_query** - Rewrites user question for optimal retrieval, extracts entity mentions
+1. **analyze_query** - Consolidated query processing using structured output:
+   - Rewrites query resolving pronouns from chat history
+   - Extracts entity mentions for graph lookup
+   - Classifies query type (factual/comparison/follow_up/exploratory)
+   - Determines if history context is needed for the answer
 2. **vector_search** - Semantic search on Document nodes via Neo4j vector index
-3. **graph_traverse** - 1-hop Cypher traversal from matched entities to find relationships
-4. **synthesize** - Combines semantic + graph context to generate final answer
+3. **graph_traverse** - Adaptive Cypher traversal (1-hop for factual, 2-hop for exploratory)
+4. **synthesize** - Generates answer with response mode support (concise/standard/detailed)
 
 **State Definition:**
 ```python
 class GraphRAGState(TypedDict):
-    question: str              # Original user question
-    standalone_query: str      # Rewritten query for retrieval
+    # Input
+    question: str                    # Original user question
+    chat_history: List[ChatMessage]  # Conversation history for multi-turn
+    response_mode: Literal["concise", "standard", "detailed"]
+
+    # Query Processing
+    query_analysis: QueryAnalysis    # Consolidated analysis results
+    standalone_query: str            # Rewritten query for retrieval
     extracted_entities: List[str]
+
+    # Retrieval
     semantic_context: List[dict]
     graph_context: List[dict]
+
+    # Output
     final_answer: str
+    error: Optional[str]
 ```
+
+**Multi-turn Conversations:** The agent resolves pronouns and references (e.g., "How does Tealium solve that?") using chat history context.
+
+**Response Modes:**
+- `concise` - 2-4 sentences, direct answer
+- `standard` - 1-2 paragraphs, balanced detail
+- `detailed` - Comprehensive with sections and examples
 
 ## Environment Variables
 
@@ -144,7 +166,11 @@ EMBEDDING_MODEL=text-embedding-3-small
 - **Chunking**: Uses `MarkdownHeaderTextSplitter` to split on `#`, `##`, `###` headers, preserving document structure
 - **Schema Enforcement**: `LLMGraphTransformer` with `strict_mode=True` and explicit `allowed_nodes`/`allowed_relationships`
 - **Hybrid Retrieval**: Vector search finds semantically similar chunks, then Cypher expands to neighboring graph nodes
-- **Dual Attribute Model**: High-frequency attributes in Neo4j, enrichment from warehouse via API (conceptually)
+- **Multi-turn Conversations**: Chat history passed to agent for pronoun resolution and contextual follow-ups
+- **Response Modes**: Configurable verbosity (concise/standard/detailed) via UI toggle
+- **Entity Resolution**: Multi-strategy matching (exact → normalized → fuzzy) with confidence scores
+- **Adaptive Graph Traversal**: 2-hop for exploratory queries, 1-hop for factual/follow-up queries
+- **Consolidated Query Processing**: Single LLM call with structured output replaces separate rewrite + extraction calls
 - **Incremental Updates**: Manifest-based change detection using SHA256 content hashing; only new/modified files are re-processed
 - **Stable Chunk IDs**: Content-based chunk IDs (format: `doc{N}_{hash8}`) that are deterministic across runs
 

@@ -2,6 +2,7 @@
 Step 5: Streamlit Interface
 
 A chat interface for querying the GraphRAG knowledge base.
+Supports multi-turn conversations with response mode selection.
 """
 
 import streamlit as st
@@ -60,10 +61,24 @@ agent = init_agent(storage)
 
 
 # =============================================================================
-# Sidebar - Database Info
+# Sidebar - Settings & Database Info
 # =============================================================================
 
 with st.sidebar:
+    st.header("⚙️ Settings")
+
+    # Response mode selector
+    response_mode = st.radio(
+        "Response Mode",
+        ["concise", "standard", "detailed"],
+        index=1,
+        help="Controls response length: concise (2-4 sentences), standard (1-2 paragraphs), detailed (comprehensive)"
+    )
+
+    # Store in session state for persistence
+    st.session_state.response_mode = response_mode
+
+    st.markdown("---")
     st.header("📊 Knowledge Graph Stats")
 
     if storage:
@@ -96,6 +111,30 @@ with st.sidebar:
         if st.button(q, key=q):
             st.session_state.user_input = q
 
+    # Clear conversation button
+    st.markdown("---")
+    if st.button("🗑️ Clear Conversation"):
+        st.session_state.messages = []
+        st.rerun()
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def build_chat_history():
+    """Build chat history from session state for the agent."""
+    if "messages" not in st.session_state:
+        return []
+
+    history = []
+    for msg in st.session_state.messages:
+        history.append({
+            "role": msg["role"],
+            "content": msg["content"],
+        })
+    return history
+
 
 # =============================================================================
 # Chat Interface
@@ -114,6 +153,13 @@ for message in st.session_state.messages:
         if message["role"] == "assistant" and "debug" in message:
             with st.expander("🔍 Retrieval Details"):
                 debug = message["debug"]
+
+                # Show query analysis if available
+                query_analysis = debug.get("query_analysis", {})
+                if query_analysis:
+                    st.write(f"**Query Type:** {query_analysis.get('query_type', 'N/A')}")
+                    st.write(f"**Requires History:** {query_analysis.get('requires_history', False)}")
+
                 st.write(f"**Rewritten Query:** {debug.get('standalone_query', 'N/A')}")
                 st.write(f"**Extracted Entities:** {debug.get('extracted_entities', [])}")
                 st.write(f"**Semantic Results:** {len(debug.get('semantic_context', []))} chunks")
@@ -147,14 +193,31 @@ if user_input:
         else:
             with st.spinner("Thinking..."):
                 try:
-                    # Run the query through the agent
-                    result = run_query(agent, user_input)
+                    # Build chat history from prior messages (excluding current)
+                    chat_history = build_chat_history()[:-1]  # Exclude the just-added user message
+
+                    # Get response mode from session state
+                    response_mode = st.session_state.get("response_mode", "standard")
+
+                    # Run the query through the agent with history and response mode
+                    result = run_query(
+                        agent,
+                        user_input,
+                        chat_history=chat_history,
+                        response_mode=response_mode,
+                    )
 
                     # Display the answer
                     st.markdown(result["final_answer"])
 
                     # Show retrieval details
                     with st.expander("🔍 Retrieval Details"):
+                        # Show query analysis
+                        query_analysis = result.get("query_analysis", {})
+                        if query_analysis:
+                            st.write(f"**Query Type:** {query_analysis.get('query_type', 'N/A')}")
+                            st.write(f"**Requires History:** {query_analysis.get('requires_history', False)}")
+
                         st.write(f"**Rewritten Query:** {result.get('standalone_query', 'N/A')}")
                         st.write(f"**Extracted Entities:** {result.get('extracted_entities', [])}")
                         st.write(f"**Semantic Results:** {len(result.get('semantic_context', []))} chunks")
@@ -170,6 +233,7 @@ if user_input:
                         "role": "assistant",
                         "content": result["final_answer"],
                         "debug": {
+                            "query_analysis": result.get("query_analysis"),
                             "standalone_query": result.get("standalone_query"),
                             "extracted_entities": result.get("extracted_entities"),
                             "semantic_context": result.get("semantic_context"),

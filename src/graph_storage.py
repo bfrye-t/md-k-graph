@@ -348,6 +348,102 @@ class GraphStorage:
         """
         return self.graph.query(query, {"text": text, "limit": limit})
 
+    def resolve_entities(self, entity_names: List[str]) -> List[dict]:
+        """
+        Resolve entity names to actual graph nodes with confidence scores.
+
+        Uses a multi-strategy matching approach:
+        1. Exact match on n.id (confidence: 1.0)
+        2. Normalized match - case-insensitive, trimmed (confidence: 0.9)
+        3. Fuzzy CONTAINS match (confidence: 0.5-0.7)
+
+        Args:
+            entity_names: List of entity names to resolve.
+
+        Returns:
+            List of matched entities with confidence scores, sorted by confidence.
+            Each entry has: id, labels, description, confidence, match_type
+        """
+        if not entity_names:
+            return []
+
+        results = []
+
+        for name in entity_names:
+            name_clean = name.strip()
+            name_lower = name_clean.lower()
+
+            # Strategy 1: Exact match
+            exact_query = """
+            MATCH (n:__Entity__)
+            WHERE n.id = $name
+            RETURN n.id AS id,
+                   labels(n) AS labels,
+                   n.description AS description,
+                   'exact' AS match_type
+            LIMIT 1
+            """
+            exact_results = self.graph.query(exact_query, {"name": name_clean})
+            if exact_results:
+                for r in exact_results:
+                    r["confidence"] = 1.0
+                    results.append(r)
+                continue  # Found exact match, skip other strategies
+
+            # Strategy 2: Normalized match (case-insensitive)
+            normalized_query = """
+            MATCH (n:__Entity__)
+            WHERE toLower(trim(n.id)) = toLower(trim($name))
+            RETURN n.id AS id,
+                   labels(n) AS labels,
+                   n.description AS description,
+                   'normalized' AS match_type
+            LIMIT 1
+            """
+            norm_results = self.graph.query(normalized_query, {"name": name_clean})
+            if norm_results:
+                for r in norm_results:
+                    r["confidence"] = 0.9
+                    results.append(r)
+                continue  # Found normalized match, skip fuzzy
+
+            # Strategy 3: Fuzzy CONTAINS match
+            fuzzy_query = """
+            MATCH (n:__Entity__)
+            WHERE toLower(n.id) CONTAINS toLower($name)
+               OR toLower($name) CONTAINS toLower(n.id)
+            RETURN n.id AS id,
+                   labels(n) AS labels,
+                   n.description AS description,
+                   'fuzzy' AS match_type
+            LIMIT 3
+            """
+            fuzzy_results = self.graph.query(fuzzy_query, {"name": name_clean})
+            for r in fuzzy_results:
+                # Calculate confidence based on length ratio
+                match_id_lower = r["id"].lower()
+                if name_lower in match_id_lower:
+                    # Query is substring of entity ID
+                    ratio = len(name_lower) / len(match_id_lower)
+                    r["confidence"] = 0.5 + (0.2 * ratio)
+                elif match_id_lower in name_lower:
+                    # Entity ID is substring of query
+                    ratio = len(match_id_lower) / len(name_lower)
+                    r["confidence"] = 0.5 + (0.2 * ratio)
+                else:
+                    r["confidence"] = 0.5
+                results.append(r)
+
+        # Sort by confidence descending and deduplicate by id
+        seen_ids = set()
+        unique_results = []
+        for r in sorted(results, key=lambda x: x["confidence"], reverse=True):
+            if r["id"] not in seen_ids:
+                seen_ids.add(r["id"])
+                unique_results.append(r)
+
+        return unique_results
+
     def remove_document_chunks(self, chunk_ids: List[str]) -> int:
         """
         Remove document chunks by their IDs.

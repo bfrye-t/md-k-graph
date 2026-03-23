@@ -5,29 +5,70 @@ A state machine that orchestrates hybrid retrieval (vector + graph)
 and synthesizes strategic answers.
 
 Nodes:
-1. Query Rewriter - Optimizes the user question for retrieval
+1. Query Analyzer - Rewrites query, extracts entities, classifies query type
 2. Vector Search - Finds semantically relevant document chunks
-3. Graph Traversal - Expands context via graph relationships
-4. Synthesize - Generates the final answer
+3. Graph Traversal - Expands context via graph relationships (adaptive hops)
+4. Synthesize - Generates the final answer with response mode support
 """
 
 import json
-from typing import TypedDict, List, Optional, Annotated
+from typing import TypedDict, List, Optional, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.documents import Document
 from langgraph.graph import StateGraph, END
+from pydantic import BaseModel, Field
 
 import config
 from .prompts import (
+    QUERY_ANALYZER_SYSTEM,
+    QUERY_ANALYZER_HUMAN,
     QUERY_REWRITER_SYSTEM,
     QUERY_REWRITER_HUMAN,
     SYNTHESIZER_SYSTEM,
     SYNTHESIZER_HUMAN,
+    RESPONSE_MODE_INSTRUCTIONS,
+    HISTORY_SECTION_TEMPLATE,
     ENTITY_EXTRACTOR_SYSTEM,
     ENTITY_EXTRACTOR_HUMAN,
 )
 from .graph_storage import GraphStorage
+
+
+# =============================================================================
+# Type Definitions
+# =============================================================================
+
+class ChatMessage(TypedDict):
+    """A single message in the chat history."""
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class QueryAnalysis(TypedDict):
+    """Results from query analysis."""
+    standalone_query: str
+    extracted_entities: List[str]
+    query_type: Literal["factual", "comparison", "follow_up", "exploratory"]
+    requires_history: bool
+
+
+class QueryAnalysisOutput(BaseModel):
+    """Pydantic model for structured LLM output during query analysis."""
+    standalone_query: str = Field(
+        description="Rewritten query resolving pronouns and references from chat history"
+    )
+    extracted_entities: List[str] = Field(
+        default_factory=list,
+        description="Entity names that might exist in the knowledge graph"
+    )
+    query_type: Literal["factual", "comparison", "follow_up", "exploratory"] = Field(
+        description="Classification of the query type"
+    )
+    requires_history: bool = Field(
+        default=False,
+        description="Whether the answer benefits from prior conversation context"
+    )
 
 
 # =============================================================================
@@ -36,11 +77,21 @@ from .graph_storage import GraphStorage
 
 class GraphRAGState(TypedDict):
     """State for the GraphRAG agent."""
+    # Input
     question: str                           # Original user question
-    standalone_query: str                   # Rewritten query for retrieval
-    extracted_entities: List[str]           # Entities extracted from question
+    chat_history: List[ChatMessage]         # Conversation history for multi-turn
+    response_mode: Literal["concise", "standard", "detailed"]  # Response verbosity
+
+    # Query Processing
+    query_analysis: QueryAnalysis           # Consolidated analysis results
+    standalone_query: str                   # Rewritten query (backward compat)
+    extracted_entities: List[str]           # Entities from question (backward compat)
+
+    # Retrieval
     semantic_context: List[dict]            # Results from vector search
     graph_context: List[dict]               # Results from graph traversal
+
+    # Output
     final_answer: str                       # Synthesized answer
     error: Optional[str]                    # Error message if any
 
@@ -61,39 +112,80 @@ def get_llm():
         raise ValueError(f"Unsupported LLM provider: {config.LLM_PROVIDER}")
 
 
+def format_chat_history(history: List[ChatMessage], max_turns: int = 5) -> str:
+    """Format chat history for inclusion in prompts."""
+    if not history:
+        return "(No prior conversation)"
+
+    # Take last N turns
+    recent = history[-max_turns * 2:]  # Each turn is user + assistant
+
+    formatted = []
+    for msg in recent:
+        role = "User" if msg["role"] == "user" else "Assistant"
+        # Truncate long messages
+        content = msg["content"][:500] + "..." if len(msg["content"]) > 500 else msg["content"]
+        formatted.append(f"{role}: {content}")
+
+    return "\n".join(formatted)
+
+
 # =============================================================================
 # Node Functions
 # =============================================================================
 
-def rewrite_query(state: GraphRAGState) -> GraphRAGState:
+def analyze_query(state: GraphRAGState) -> GraphRAGState:
     """
-    Node 1: Rewrite the user's question for optimal retrieval.
-    Also extracts entity mentions for graph lookup.
+    Node 1: Analyze the user's question for optimal retrieval.
+
+    Consolidates query rewriting and entity extraction into a single LLM call
+    using structured output. Also classifies query type and determines if
+    history context is needed for the answer.
     """
     llm = get_llm()
     question = state["question"]
+    chat_history = state.get("chat_history", [])
 
-    # Rewrite query for vector search
-    rewrite_messages = [
-        SystemMessage(content=QUERY_REWRITER_SYSTEM),
-        HumanMessage(content=QUERY_REWRITER_HUMAN.format(question=question)),
-    ]
-    rewritten = llm.invoke(rewrite_messages)
-    state["standalone_query"] = rewritten.content.strip()
+    # Format chat history for the prompt
+    history_str = format_chat_history(chat_history)
 
-    # Extract entities for graph lookup
-    extract_messages = [
-        SystemMessage(content=ENTITY_EXTRACTOR_SYSTEM),
-        HumanMessage(content=ENTITY_EXTRACTOR_HUMAN.format(question=question)),
+    # Use structured output for consolidated analysis
+    structured_llm = llm.with_structured_output(QueryAnalysisOutput)
+
+    messages = [
+        SystemMessage(content=QUERY_ANALYZER_SYSTEM),
+        HumanMessage(content=QUERY_ANALYZER_HUMAN.format(
+            chat_history=history_str,
+            question=question,
+        )),
     ]
-    extracted = llm.invoke(extract_messages)
 
     try:
-        # Parse JSON array of entities
-        entities = json.loads(extracted.content.strip())
-        state["extracted_entities"] = entities if isinstance(entities, list) else []
-    except json.JSONDecodeError:
+        result: QueryAnalysisOutput = structured_llm.invoke(messages)
+
+        # Populate query_analysis
+        state["query_analysis"] = {
+            "standalone_query": result.standalone_query,
+            "extracted_entities": result.extracted_entities,
+            "query_type": result.query_type,
+            "requires_history": result.requires_history,
+        }
+
+        # Backward compatibility fields
+        state["standalone_query"] = result.standalone_query
+        state["extracted_entities"] = result.extracted_entities
+
+    except Exception as e:
+        # Fallback: use original question
+        state["query_analysis"] = {
+            "standalone_query": question,
+            "extracted_entities": [],
+            "query_type": "factual",
+            "requires_history": False,
+        }
+        state["standalone_query"] = question
         state["extracted_entities"] = []
+        state["error"] = f"Query analysis fallback: {str(e)}"
 
     return state
 
@@ -131,15 +223,34 @@ def vector_search(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState:
 def graph_traverse(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState:
     """
     Node 3: Traverse the graph from extracted entities and vector results.
+
+    Uses adaptive hop depth based on query type:
+    - exploratory: 2 hops for richer context
+    - factual/follow_up: 1 hop for focused results
     """
     graph_context = []
+
+    # Determine hop depth based on query type
+    query_analysis = state.get("query_analysis", {})
+    query_type = query_analysis.get("query_type", "factual")
+    hops = 2 if query_type == "exploratory" else 1
 
     # Collect node IDs to traverse from
     node_ids = []
 
-    # Add extracted entities
+    # Add extracted entities (with resolution)
     if state.get("extracted_entities"):
-        node_ids.extend(state["extracted_entities"])
+        for entity in state["extracted_entities"]:
+            # Try to resolve entity to actual graph nodes
+            resolved = storage.resolve_entities([entity])
+            if resolved:
+                # Add high-confidence matches
+                for match in resolved:
+                    if match.get("confidence", 0) >= 0.5:
+                        node_ids.append(match["id"])
+            else:
+                # Fallback: use entity name directly
+                node_ids.append(entity)
 
     # Also try to find entities matching terms from semantic results
     if state.get("semantic_context"):
@@ -157,8 +268,8 @@ def graph_traverse(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState
 
     if node_ids:
         try:
-            # Perform 1-hop traversal
-            traversal_results = storage.graph_traverse(node_ids, hops=1)
+            # Perform traversal with adaptive depth
+            traversal_results = storage.graph_traverse(node_ids, hops=hops)
 
             for result in traversal_results:
                 if result.get("target"):  # Has a neighbor
@@ -181,8 +292,25 @@ def graph_traverse(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState
 def synthesize_answer(state: GraphRAGState) -> GraphRAGState:
     """
     Node 4: Synthesize final answer from semantic and graph context.
+
+    Supports response modes (concise/standard/detailed) and includes
+    conversation history for coherent follow-ups.
     """
     llm = get_llm()
+
+    # Get response mode instructions
+    response_mode = state.get("response_mode", "standard")
+    mode_instructions = RESPONSE_MODE_INSTRUCTIONS.get(response_mode, RESPONSE_MODE_INSTRUCTIONS["standard"])
+
+    # Build history section if needed
+    query_analysis = state.get("query_analysis", {})
+    chat_history = state.get("chat_history", [])
+    history_section = ""
+
+    if query_analysis.get("requires_history") and chat_history:
+        # Include last 3 turns for context
+        history_str = format_chat_history(chat_history, max_turns=3)
+        history_section = HISTORY_SECTION_TEMPLATE.format(history=history_str)
 
     # Format semantic context
     semantic_str = ""
@@ -205,11 +333,14 @@ def synthesize_answer(state: GraphRAGState) -> GraphRAGState:
     else:
         graph_str = "No graph relationships found for the extracted entities."
 
-    # Generate answer
+    # Generate answer with response mode
+    system_prompt = SYNTHESIZER_SYSTEM.format(response_mode_instructions=mode_instructions)
+
     messages = [
-        SystemMessage(content=SYNTHESIZER_SYSTEM),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=SYNTHESIZER_HUMAN.format(
             question=state["question"],
+            history_section=history_section,
             semantic_context=semantic_str or "No semantic matches found.",
             graph_context=graph_str,
         )),
@@ -239,14 +370,14 @@ def create_graph_rag_agent(storage: GraphStorage):
     workflow = StateGraph(GraphRAGState)
 
     # Add nodes with storage bound via closures
-    workflow.add_node("rewrite_query", rewrite_query)
+    workflow.add_node("analyze_query", analyze_query)
     workflow.add_node("vector_search", lambda state: vector_search(state, storage))
     workflow.add_node("graph_traverse", lambda state: graph_traverse(state, storage))
     workflow.add_node("synthesize", synthesize_answer)
 
     # Define the flow
-    workflow.set_entry_point("rewrite_query")
-    workflow.add_edge("rewrite_query", "vector_search")
+    workflow.set_entry_point("analyze_query")
+    workflow.add_edge("analyze_query", "vector_search")
     workflow.add_edge("vector_search", "graph_traverse")
     workflow.add_edge("graph_traverse", "synthesize")
     workflow.add_edge("synthesize", END)
@@ -255,19 +386,29 @@ def create_graph_rag_agent(storage: GraphStorage):
     return workflow.compile()
 
 
-def run_query(agent, question: str) -> dict:
+def run_query(
+    agent,
+    question: str,
+    chat_history: Optional[List[ChatMessage]] = None,
+    response_mode: Literal["concise", "standard", "detailed"] = "standard",
+) -> dict:
     """
     Run a query through the agent and return the full state.
 
     Args:
         agent: Compiled LangGraph agent.
         question: User's question.
+        chat_history: Optional list of prior chat messages for multi-turn context.
+        response_mode: Response verbosity ("concise", "standard", or "detailed").
 
     Returns:
         Final state dictionary with all results.
     """
     initial_state = {
         "question": question,
+        "chat_history": chat_history or [],
+        "response_mode": response_mode,
+        "query_analysis": {},
         "standalone_query": "",
         "extracted_entities": [],
         "semantic_context": [],
@@ -298,7 +439,7 @@ if __name__ == "__main__":
     # Create agent
     agent = create_graph_rag_agent(storage)
 
-    # Test query
+    # Test single query
     test_question = "What problems do Data Teams experience with their data cloud infrastructure?"
 
     print(f"\nQuestion: {test_question}")
@@ -306,8 +447,28 @@ if __name__ == "__main__":
 
     result = run_query(agent, test_question)
 
-    print(f"\nRewritten Query: {result['standalone_query']}")
+    print(f"\nQuery Analysis: {result.get('query_analysis', {})}")
+    print(f"Rewritten Query: {result['standalone_query']}")
     print(f"Extracted Entities: {result['extracted_entities']}")
     print(f"Semantic Results: {len(result['semantic_context'])} chunks")
     print(f"Graph Results: {len(result['graph_context'])} relationships")
     print(f"\n=== ANSWER ===\n{result['final_answer']}")
+
+    # Test multi-turn conversation
+    print("\n" + "=" * 50)
+    print("Testing multi-turn conversation...")
+    print("=" * 50)
+
+    history = [
+        {"role": "user", "content": test_question},
+        {"role": "assistant", "content": result["final_answer"]},
+    ]
+
+    follow_up = "How does Tealium solve that?"
+    print(f"\nFollow-up: {follow_up}")
+    print("-" * 50)
+
+    result2 = run_query(agent, follow_up, chat_history=history)
+    print(f"\nQuery Analysis: {result2.get('query_analysis', {})}")
+    print(f"Rewritten Query: {result2['standalone_query']}")
+    print(f"\n=== ANSWER ===\n{result2['final_answer']}")

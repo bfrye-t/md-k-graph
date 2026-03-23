@@ -57,11 +57,12 @@ md-k-graph/
 │   ├── ingestion.py        # Markdown loading & header-based chunking
 │   ├── graph_extraction.py # LLMGraphTransformer with strict schema
 │   ├── graph_storage.py    # Neo4j connection, loading, vector indexing
+│   ├── manifest.py         # Change detection for incremental updates
 │   ├── agent.py            # LangGraph state machine (4 nodes)
 │   └── prompts.py          # System prompts for rewriting & synthesis
 ├── scripts/
-│   └── build_graph.py      # One-time graph building script
-└── product md files/       # Source strategic documents (6 files)
+│   └── build_graph.py      # Graph building script (supports incremental updates)
+└── product md files/       # Source strategic documents
 ```
 
 ## Common Commands
@@ -72,15 +73,22 @@ python3 -m pip install -r requirements.txt
 cp .env.example .env  # Then edit with your credentials
 ```
 
-### Build the Knowledge Graph (one-time)
+### Build the Knowledge Graph
 ```bash
-python3 scripts/build_graph.py
+python3 scripts/build_graph.py              # Incremental update (default)
+python3 scripts/build_graph.py --dry-run    # Preview changes without applying
+python3 scripts/build_graph.py --full       # Force full rebuild
+python3 scripts/build_graph.py --clear      # Clear database and rebuild
 ```
 
 Options:
-- `--clear` - Clear database before loading
+- `--dry-run` - Show what would change without making changes
+- `--full` - Force full rebuild (ignore manifest)
+- `--clear` - Clear database before loading (implies --full)
 - `--skip-extraction` - Skip LLM extraction (just load chunks for vector search)
 - `--batch-size N` - Batch size for LLM extraction (default: 3)
+
+**Incremental Updates:** The build script uses a manifest (`.manifest.json`) to track processed files via SHA256 content hashing. Only new or modified files are re-processed.
 
 ### Run the Streamlit App
 ```bash
@@ -137,6 +145,8 @@ EMBEDDING_MODEL=text-embedding-3-small
 - **Schema Enforcement**: `LLMGraphTransformer` with `strict_mode=True` and explicit `allowed_nodes`/`allowed_relationships`
 - **Hybrid Retrieval**: Vector search finds semantically similar chunks, then Cypher expands to neighboring graph nodes
 - **Dual Attribute Model**: High-frequency attributes in Neo4j, enrichment from warehouse via API (conceptually)
+- **Incremental Updates**: Manifest-based change detection using SHA256 content hashing; only new/modified files are re-processed
+- **Stable Chunk IDs**: Content-based chunk IDs (format: `doc{N}_{hash8}`) that are deterministic across runs
 
 ## Troubleshooting
 

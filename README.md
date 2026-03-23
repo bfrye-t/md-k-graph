@@ -84,6 +84,21 @@ This will:
 - Load graph into Neo4j
 - Create vector embeddings
 
+**Incremental Updates:** After the initial build, running `build_graph.py` again will only process new or modified files:
+
+```bash
+# Preview what would change
+python3 scripts/build_graph.py --dry-run
+
+# Force full rebuild (ignore manifest)
+python3 scripts/build_graph.py --full
+
+# Clear database and rebuild
+python3 scripts/build_graph.py --clear
+```
+
+The system uses SHA256 content hashing to detect changes, so only modified files trigger re-extraction.
+
 ### 4. Run the Chat Interface
 
 ```bash
@@ -109,10 +124,11 @@ Open http://localhost:8501
 │   ├── ingestion.py        # Markdown loading & chunking
 │   ├── graph_extraction.py # LLM graph extraction
 │   ├── graph_storage.py    # Neo4j operations
+│   ├── manifest.py         # Change detection for incremental updates
 │   ├── agent.py            # LangGraph agent
 │   └── prompts.py          # LLM prompts
 ├── scripts/
-│   └── build_graph.py      # Graph building script
+│   └── build_graph.py      # Graph building script (supports incremental)
 └── product md files/       # Source documents
 ```
 

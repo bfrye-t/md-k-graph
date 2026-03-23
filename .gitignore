@@ -52,3 +52,6 @@ htmlcov/
 # Misc
 *.log
 *.tmp
+
+# GraphRAG manifest (local build state)
+.manifest.json

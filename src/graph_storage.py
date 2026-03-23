@@ -178,6 +178,71 @@ class GraphStorage:
             self._vector_store = self.create_vector_index()
         return self._vector_store
 
+    def get_existing_vector_store(self) -> Optional[Neo4jVector]:
+        """
+        Connect to an existing vector index without regenerating embeddings.
+
+        Returns:
+            Neo4jVector instance if index exists, None otherwise.
+        """
+        if config.LLM_PROVIDER == "openai":
+            from langchain_openai import OpenAIEmbeddings
+            embeddings = OpenAIEmbeddings(model=config.EMBEDDING_MODEL)
+        else:
+            from langchain_openai import OpenAIEmbeddings
+            embeddings = OpenAIEmbeddings(model=config.EMBEDDING_MODEL)
+
+        try:
+            self._vector_store = Neo4jVector.from_existing_index(
+                embedding=embeddings,
+                url=self.uri,
+                username=self.username,
+                password=self.password,
+                database=self.database,
+                index_name=config.VECTOR_INDEX_NAME,
+            )
+            return self._vector_store
+        except Exception as e:
+            print(f"Note: Could not connect to existing index: {e}")
+            return None
+
+    def add_embeddings_incrementally(self, chunks: List[Document]) -> int:
+        """
+        Add embeddings for new document chunks without regenerating all.
+
+        Uses Neo4jVector.add_texts() to add only the new chunks to the
+        existing vector index.
+
+        Args:
+            chunks: List of Document objects to embed and add.
+
+        Returns:
+            Number of chunks added.
+        """
+        if not chunks:
+            return 0
+
+        # Ensure we have a vector store
+        vector_store = self.get_existing_vector_store()
+        if vector_store is None:
+            print("No existing index found, creating new one...")
+            vector_store = self.create_vector_index()
+            return len(chunks)  # All chunks were added via from_existing_graph
+
+        # Add texts incrementally
+        texts = [chunk.page_content for chunk in chunks]
+        metadatas = [chunk.metadata for chunk in chunks]
+        ids = [chunk.metadata.get("chunk_id") for chunk in chunks]
+
+        vector_store.add_texts(
+            texts=texts,
+            metadatas=metadatas,
+            ids=ids,
+        )
+
+        print(f"Added {len(chunks)} embeddings incrementally.")
+        return len(chunks)
+
     def create_fulltext_index(self):
         """Create fulltext index for keyword search on entity nodes."""
         print("Creating fulltext index on entity nodes...")
@@ -282,6 +347,96 @@ class GraphStorage:
         LIMIT $limit
         """
         return self.graph.query(query, {"text": text, "limit": limit})
+
+    def remove_document_chunks(self, chunk_ids: List[str]) -> int:
+        """
+        Remove document chunks by their IDs.
+
+        Used during incremental updates to clean up chunks from
+        modified or deleted files before re-processing.
+
+        Args:
+            chunk_ids: List of chunk IDs to remove.
+
+        Returns:
+            Number of nodes deleted.
+        """
+        if not chunk_ids:
+            return 0
+
+        query = """
+        MATCH (d:Document)
+        WHERE d.chunk_id IN $chunk_ids
+        DETACH DELETE d
+        RETURN count(d) AS deleted_count
+        """
+        result = self.graph.query(query, {"chunk_ids": chunk_ids})
+        deleted = result[0]["deleted_count"] if result else 0
+        print(f"Removed {deleted} document chunks.")
+        return deleted
+
+    def remove_entities_by_ids(self, entity_ids: List[str]) -> int:
+        """
+        Remove entity nodes by their IDs.
+
+        Used to clean up entities that were extracted from files
+        that have been deleted or modified.
+
+        Args:
+            entity_ids: List of entity IDs to remove.
+
+        Returns:
+            Number of nodes deleted.
+        """
+        if not entity_ids:
+            return 0
+
+        query = """
+        MATCH (n:__Entity__)
+        WHERE n.id IN $entity_ids
+        DETACH DELETE n
+        RETURN count(n) AS deleted_count
+        """
+        result = self.graph.query(query, {"entity_ids": entity_ids})
+        deleted = result[0]["deleted_count"] if result else 0
+        print(f"Removed {deleted} entity nodes.")
+        return deleted
+
+    def get_orphaned_entities(self) -> List[str]:
+        """
+        Find entity nodes that have no relationships.
+
+        These are candidates for cleanup after document deletion.
+
+        Returns:
+            List of orphaned entity IDs.
+        """
+        query = """
+        MATCH (n:__Entity__)
+        WHERE NOT (n)-[]-()
+        RETURN n.id AS id
+        """
+        results = self.graph.query(query)
+        return [r["id"] for r in results if r["id"]]
+
+    def cleanup_orphaned_entities(self) -> int:
+        """
+        Remove all entity nodes that have no relationships.
+
+        Returns:
+            Number of orphaned entities removed.
+        """
+        query = """
+        MATCH (n:__Entity__)
+        WHERE NOT (n)-[]-()
+        DELETE n
+        RETURN count(n) AS deleted_count
+        """
+        result = self.graph.query(query)
+        deleted = result[0]["deleted_count"] if result else 0
+        if deleted > 0:
+            print(f"Cleaned up {deleted} orphaned entities.")
+        return deleted
 
     def get_schema_summary(self) -> str:
         """Get a summary of the graph schema."""

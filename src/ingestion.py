@@ -3,17 +3,53 @@ Step 1: Ingestion & Chunking
 
 Reads Markdown files and chunks them using LangChain's MarkdownHeaderTextSplitter
 to preserve strategic structural context based on ## and ### headers.
+
+Supports incremental updates via:
+- Stable content-based chunk IDs (deterministic across runs)
+- Targeted file loading for processing only specific files
 """
 
-import os
+import hashlib
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 import config
+
+
+def generate_chunk_id(filename: str, content: str, headers: dict) -> str:
+    """
+    Generate a stable, content-based chunk ID.
+
+    The ID is deterministic based on the filename, content hash, and header context.
+    This ensures the same content produces the same ID across runs, enabling
+    incremental updates without re-processing unchanged chunks.
+
+    Args:
+        filename: Source filename (e.g., "1 - broader-framing.md")
+        content: The chunk's text content
+        headers: Dict of header metadata (h1_header, h2_header, h3_header)
+
+    Returns:
+        Stable chunk ID in format "doc{N}_{hash8}" where hash8 is first 8 chars
+        of SHA256 hash of content + headers.
+    """
+    # Extract doc order from filename
+    match = re.match(r"(\d+)\s*-", filename)
+    doc_num = match.group(1) if match else "0"
+
+    # Build a stable hash from content and header context
+    hash_input = content
+    for key in ["h1_header", "h2_header", "h3_header"]:
+        if headers.get(key):
+            hash_input += f"|{key}:{headers[key]}"
+
+    content_hash = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()[:8]
+
+    return f"doc{doc_num}_{content_hash}"
 
 
 def load_markdown_files(directory: str = None) -> List[Document]:
@@ -30,16 +66,54 @@ def load_markdown_files(directory: str = None) -> List[Document]:
     if directory is None:
         directory = config.MARKDOWN_DIR
 
+    md_path = Path(directory)
+    if not md_path.exists():
+        raise FileNotFoundError(f"Directory not found: {directory}")
+
+    # Get all markdown files
+    md_files = sorted(md_path.glob("*.md"), key=lambda x: x.name)
+    filenames = [f.name for f in md_files]
+
+    return load_specific_files(filenames, directory)
+
+
+def load_specific_files(
+    filenames: List[str],
+    directory: Optional[str] = None,
+) -> List[Document]:
+    """
+    Load specific markdown files by filename.
+
+    Enables incremental processing by loading only the files that need
+    to be processed (new or modified files).
+
+    Args:
+        filenames: List of filenames to load (e.g., ["1 - broader-framing.md"])
+        directory: Path to directory containing the files.
+                   Defaults to config.MARKDOWN_DIR.
+
+    Returns:
+        List of Document objects with content and metadata.
+    """
+    if directory is None:
+        directory = config.MARKDOWN_DIR
+
     documents = []
     md_path = Path(directory)
 
     if not md_path.exists():
         raise FileNotFoundError(f"Directory not found: {directory}")
 
-    # Sort files by their numeric prefix for consistent ordering
-    md_files = sorted(md_path.glob("*.md"), key=lambda x: x.name)
+    # Sort filenames for consistent ordering
+    sorted_filenames = sorted(filenames)
 
-    for file_path in md_files:
+    for filename in sorted_filenames:
+        file_path = md_path / filename
+
+        if not file_path.exists():
+            print(f"Warning: File not found, skipping: {filename}")
+            continue
+
         print(f"Loading: {file_path.name}")
 
         with open(file_path, "r", encoding="utf-8") as f:
@@ -70,7 +144,10 @@ def load_markdown_files(directory: str = None) -> List[Document]:
     return documents
 
 
-def chunk_documents(documents: List[Document]) -> List[Document]:
+def chunk_documents(
+    documents: List[Document],
+    use_stable_ids: bool = True,
+) -> List[Document]:
     """
     Chunk documents using MarkdownHeaderTextSplitter.
 
@@ -79,6 +156,9 @@ def chunk_documents(documents: List[Document]) -> List[Document]:
 
     Args:
         documents: List of Document objects to chunk.
+        use_stable_ids: If True, use content-based stable chunk IDs that
+                        are deterministic across runs. If False, use the
+                        legacy position-based IDs. Default is True.
 
     Returns:
         List of chunked Document objects with header metadata.
@@ -111,7 +191,16 @@ def chunk_documents(documents: List[Document]) -> List[Document]:
             }
 
             # Create a chunk ID for graph linking
-            chunk_id = f"{doc.metadata['doc_order']}_{i}"
+            if use_stable_ids:
+                chunk_id = generate_chunk_id(
+                    filename=doc.metadata.get("filename", ""),
+                    content=chunk.page_content,
+                    headers=chunk.metadata,
+                )
+            else:
+                # Legacy position-based ID
+                chunk_id = f"{doc.metadata['doc_order']}_{i}"
+
             combined_metadata["chunk_id"] = chunk_id
 
             # Create new document with combined metadata

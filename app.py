@@ -161,6 +161,13 @@ for message in st.session_state.messages:
                     st.write(f"**Requires History:** {query_analysis.get('requires_history', False)}")
 
                 st.write(f"**Rewritten Query:** {debug.get('standalone_query', 'N/A')}")
+
+                # Show preserved user context if present
+                user_context = query_analysis.get("user_context", "") if query_analysis else ""
+                if user_context:
+                    with st.expander("User-Provided Context (preserved)"):
+                        st.text(user_context[:2000] + ("..." if len(user_context) > 2000 else ""))
+
                 st.write(f"**Extracted Entities:** {debug.get('extracted_entities', [])}")
                 st.write(f"**Semantic Results:** {len(debug.get('semantic_context', []))} chunks")
                 st.write(f"**Graph Results:** {len(debug.get('graph_context', []))} relationships")
@@ -219,6 +226,13 @@ if user_input:
                             st.write(f"**Requires History:** {query_analysis.get('requires_history', False)}")
 
                         st.write(f"**Rewritten Query:** {result.get('standalone_query', 'N/A')}")
+
+                        # Show preserved user context if present
+                        user_context = query_analysis.get("user_context", "") if query_analysis else ""
+                        if user_context:
+                            with st.expander("User-Provided Context (preserved)"):
+                                st.text(user_context[:2000] + ("..." if len(user_context) > 2000 else ""))
+
                         st.write(f"**Extracted Entities:** {result.get('extracted_entities', [])}")
                         st.write(f"**Semantic Results:** {len(result.get('semantic_context', []))} chunks")
                         st.write(f"**Graph Results:** {len(result.get('graph_context', []))} relationships")

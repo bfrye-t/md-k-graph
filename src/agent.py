@@ -51,6 +51,7 @@ class QueryAnalysis(TypedDict):
     extracted_entities: List[str]
     query_type: Literal["factual", "comparison", "follow_up", "exploratory"]
     requires_history: bool
+    user_context: str
 
 
 class QueryAnalysisOutput(BaseModel):
@@ -68,6 +69,10 @@ class QueryAnalysisOutput(BaseModel):
     requires_history: bool = Field(
         default=False,
         description="Whether the answer benefits from prior conversation context"
+    )
+    user_context: str = Field(
+        default="",
+        description="Verbatim user-provided context (definitions, requirements, structured data) that should be preserved for synthesis"
     )
 
 
@@ -169,6 +174,7 @@ def analyze_query(state: GraphRAGState) -> GraphRAGState:
             "extracted_entities": result.extracted_entities,
             "query_type": result.query_type,
             "requires_history": result.requires_history,
+            "user_context": result.user_context,
         }
 
         # Backward compatibility fields
@@ -182,6 +188,7 @@ def analyze_query(state: GraphRAGState) -> GraphRAGState:
             "extracted_entities": [],
             "query_type": "factual",
             "requires_history": False,
+            "user_context": "",
         }
         state["standalone_query"] = question
         state["extracted_entities"] = []
@@ -312,6 +319,12 @@ def synthesize_answer(state: GraphRAGState) -> GraphRAGState:
         history_str = format_chat_history(chat_history, max_turns=3)
         history_section = HISTORY_SECTION_TEMPLATE.format(history=history_str)
 
+    # Build user context section if provided
+    user_context = query_analysis.get("user_context", "")
+    user_context_section = ""
+    if user_context:
+        user_context_section = f"=== USER-PROVIDED CONTEXT ===\n{user_context}\n\n"
+
     # Format semantic context
     semantic_str = ""
     for i, ctx in enumerate(state.get("semantic_context", []), 1):
@@ -341,6 +354,7 @@ def synthesize_answer(state: GraphRAGState) -> GraphRAGState:
         HumanMessage(content=SYNTHESIZER_HUMAN.format(
             question=state["question"],
             history_section=history_section,
+            user_context_section=user_context_section,
             semantic_context=semantic_str or "No semantic matches found.",
             graph_context=graph_str,
         )),

@@ -27,12 +27,16 @@ For each query, you must:
    - "follow_up": Questions that reference previous conversation context
    - "exploratory": Open-ended questions seeking broad understanding
 4. **Determine if history is required**: Does the answer benefit from prior conversation context?
+5. **Extract user context**: If the user provides structured data (definitions, lists, requirements, examples), preserve this VERBATIM in user_context. This is critical for generating accurate responses.
 
 Guidelines:
 - Resolve pronouns like "it", "they", "that" using the chat history
 - Normalize entity names to title case (e.g., "data teams" -> "Data Teams")
 - Extract both explicit entities and implied ones from context
-- For follow-ups, ensure the rewritten query is fully self-contained"""
+- For follow-ups, ensure the rewritten query is fully self-contained
+- PRESERVE user-provided definitions, lists, and structured content in user_context
+- The standalone_query should be optimized for search; user_context preserves details for synthesis
+- For prompts with embedded data, user_context may be longer than the rewritten query"""
 
 QUERY_ANALYZER_HUMAN = """Chat History:
 {chat_history}
@@ -106,8 +110,7 @@ IMPORTANT: This is a retrieval-only system. Do NOT offer to perform actions, cre
 
 SYNTHESIZER_HUMAN = """Question: {question}
 
-{history_section}
-=== SEMANTIC CONTEXT (from document chunks) ===
+{history_section}{user_context_section}=== SEMANTIC CONTEXT (from document chunks) ===
 {semantic_context}
 
 === GRAPH CONTEXT (related entities and relationships) ===

@@ -16,7 +16,7 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")  # AuraDB uses instance ID
 
 # LLM Configuration
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.4")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 
 # Source documents path

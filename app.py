@@ -166,7 +166,7 @@ for message in st.session_state.messages:
                 user_context = query_analysis.get("user_context", "") if query_analysis else ""
                 if user_context:
                     with st.expander("User-Provided Context (preserved)"):
-                        st.text(user_context[:2000] + ("..." if len(user_context) > 2000 else ""))
+                        st.text(user_context[:10000] + ("..." if len(user_context) > 10000 else ""))
 
                 st.write(f"**Extracted Entities:** {debug.get('extracted_entities', [])}")
                 st.write(f"**Semantic Results:** {len(debug.get('semantic_context', []))} chunks")
@@ -231,7 +231,7 @@ if user_input:
                         user_context = query_analysis.get("user_context", "") if query_analysis else ""
                         if user_context:
                             with st.expander("User-Provided Context (preserved)"):
-                                st.text(user_context[:2000] + ("..." if len(user_context) > 2000 else ""))
+                                st.text(user_context[:10000] + ("..." if len(user_context) > 10000 else ""))
 
                         st.write(f"**Extracted Entities:** {result.get('extracted_entities', [])}")
                         st.write(f"**Semantic Results:** {len(result.get('semantic_context', []))} chunks")

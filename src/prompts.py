@@ -19,7 +19,7 @@ The knowledge graph contains these entity types:
 - ProductFeature: Capabilities like "Moments API", "Event Streaming", "Living Customer Profiles"
 
 For each query, you must:
-1. **Rewrite the query**: Create a standalone version that resolves pronouns and references from chat history
+1. **Rewrite the query**: Create a SHORT (1-2 sentences MAX) search-optimized query. This is for vector search - it should capture the core topic only, NOT include details, lists, or definitions.
 2. **Extract entities**: Identify entity names that might exist in the knowledge graph
 3. **Classify query type**:
    - "factual": Direct questions about specific features, problems, or concepts
@@ -27,16 +27,14 @@ For each query, you must:
    - "follow_up": Questions that reference previous conversation context
    - "exploratory": Open-ended questions seeking broad understanding
 4. **Determine if history is required**: Does the answer benefit from prior conversation context?
-5. **Extract user context**: If the user provides structured data (definitions, lists, requirements, examples), preserve this VERBATIM in user_context. This is critical for generating accurate responses.
+5. **Extract user context**: Return an EMPTY STRING here - the system will handle preservation of detailed context programmatically.
 
-Guidelines:
-- Resolve pronouns like "it", "they", "that" using the chat history
+CRITICAL RULES:
+- standalone_query MUST be SHORT (under 200 characters ideally) - it's a search query, not the full request
+- DO NOT put lists, definitions, bullet points, or detailed instructions in standalone_query
+- Example: If user asks "Generate briefs for these themes: [long list]", standalone_query should be "Generate LinkedIn campaign briefs for Tealium pain-point themes" NOT the full list
 - Normalize entity names to title case (e.g., "data teams" -> "Data Teams")
-- Extract both explicit entities and implied ones from context
-- For follow-ups, ensure the rewritten query is fully self-contained
-- PRESERVE user-provided definitions, lists, and structured content in user_context
-- The standalone_query should be optimized for search; user_context preserves details for synthesis
-- For prompts with embedded data, user_context may be longer than the rewritten query"""
+- For follow-ups, resolve pronouns using chat history"""
 
 QUERY_ANALYZER_HUMAN = """Chat History:
 {chat_history}

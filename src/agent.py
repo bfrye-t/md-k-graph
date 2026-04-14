@@ -139,6 +139,20 @@ def format_chat_history(history: List[ChatMessage], max_turns: int = 5) -> str:
 # Node Functions
 # =============================================================================
 
+def _has_structured_content(text: str) -> bool:
+    """Check if text contains structured content that should be preserved."""
+    indicators = [
+        "\n" in text and len(text) > 200,  # Multi-line and substantial
+        "- " in text,                       # Bullet points
+        "* " in text,                       # Bullet points
+        "\n1." in text or text.startswith("1."),  # Numbered lists
+        ":" in text and "\n" in text,       # Definitions
+        "```" in text,                      # Code blocks
+        "|" in text and "-" in text,        # Tables
+    ]
+    return any(indicators)
+
+
 def analyze_query(state: GraphRAGState) -> GraphRAGState:
     """
     Node 1: Analyze the user's question for optimal retrieval.
@@ -168,13 +182,20 @@ def analyze_query(state: GraphRAGState) -> GraphRAGState:
     try:
         result: QueryAnalysisOutput = structured_llm.invoke(messages)
 
+        # For complex prompts with structured content, always preserve the
+        # full original question as user_context (don't rely on LLM extraction)
+        if _has_structured_content(question):
+            user_context = question
+        else:
+            user_context = result.user_context
+
         # Populate query_analysis
         state["query_analysis"] = {
             "standalone_query": result.standalone_query,
             "extracted_entities": result.extracted_entities,
             "query_type": result.query_type,
             "requires_history": result.requires_history,
-            "user_context": result.user_context,
+            "user_context": user_context,
         }
 
         # Backward compatibility fields

@@ -51,7 +51,7 @@ Tealium is positioned as a "connective layer" solving fragmented execution acros
 
 ```
 md-k-graph/
-├── config.py               # Configuration, schema ontology, env loading
+├── config.py               # Configuration, schema ontology, retrieval settings
 ├── app.py                  # Streamlit chat interface
 ├── src/
 │   ├── ingestion.py        # Markdown loading & header-based chunking
@@ -114,8 +114,8 @@ The agent (`src/agent.py`) is a 4-node state machine with multi-turn conversatio
    - Extracts entity mentions for graph lookup
    - Classifies query type (factual/comparison/follow_up/exploratory)
    - Determines if history context is needed for the answer
-2. **vector_search** - Semantic search on Document nodes via Neo4j vector index
-3. **graph_traverse** - Adaptive Cypher traversal (1-hop for factual, 2-hop for exploratory)
+2. **vector_search** - Semantic search on Document nodes (adaptive k based on response mode)
+3. **graph_traverse** - Adaptive Cypher traversal (hops and limits based on query type + response mode)
 4. **synthesize** - Generates answer with response mode support (concise/standard/detailed)
 
 **State Definition:**
@@ -147,6 +147,29 @@ class GraphRAGState(TypedDict):
 - `standard` - 1-2 paragraphs, balanced detail
 - `detailed` - Comprehensive with sections and examples
 
+**Adaptive Retrieval Configuration:**
+
+Retrieval parameters adjust based on query type and response mode (configured in `config.py`):
+
+| Response Mode | Semantic Chunks (k) |
+|---------------|---------------------|
+| concise       | 3                   |
+| standard      | 5                   |
+| detailed      | 8                   |
+
+| Query Type   | Response Mode | Hops | Graph Limit |
+|--------------|---------------|------|-------------|
+| factual      | concise       | 1    | 10          |
+| factual      | standard      | 1    | 25          |
+| factual      | detailed      | 1    | 50          |
+| exploratory  | concise       | 2    | 20          |
+| exploratory  | standard      | 2    | 50          |
+| exploratory  | detailed      | 2    | 100         |
+
+Additional settings:
+- `FILTER_RELATIONSHIP_TYPES` - Only return schema-defined relationship types (default: True)
+- `TRAVERSAL_DIRECTION` - Graph traversal direction: bidirectional, outgoing_only, incoming_only (default: bidirectional)
+
 ## Environment Variables
 
 Required in `.env`:
@@ -169,7 +192,8 @@ EMBEDDING_MODEL=text-embedding-3-small
 - **Multi-turn Conversations**: Chat history passed to agent for pronoun resolution and contextual follow-ups
 - **Response Modes**: Configurable verbosity (concise/standard/detailed) via UI toggle
 - **Entity Resolution**: Multi-strategy matching (exact → normalized → fuzzy) with confidence scores
-- **Adaptive Graph Traversal**: 2-hop for exploratory queries, 1-hop for factual/follow-up queries
+- **Adaptive Retrieval**: Vector search k and graph traversal limits adjust based on query type and response mode
+- **Relationship Filtering**: Graph traversal only returns schema-defined relationship types (configurable)
 - **Consolidated Query Processing**: Single LLM call with structured output replaces separate rewrite + extraction calls
 - **Incremental Updates**: Manifest-based change detection using SHA256 content hashing; only new/modified files are re-processed
 - **Stable Chunk IDs**: Content-based chunk IDs (format: `doc{N}_{hash8}`) that are deterministic across runs

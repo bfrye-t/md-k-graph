@@ -285,6 +285,9 @@ class GraphStorage:
         self,
         node_ids: List[str],
         hops: int = 1,
+        limit: int = 25,
+        filter_relationship_types: bool = True,
+        direction: str = "bidirectional",
     ) -> List[dict]:
         """
         Traverse the graph from given nodes to find related entities.
@@ -292,38 +295,72 @@ class GraphStorage:
         Args:
             node_ids: List of node IDs to start from.
             hops: Number of relationship hops to traverse (1 or 2).
+            limit: Maximum number of results to return.
+            filter_relationship_types: If True, only return schema-defined relationships.
+            direction: "bidirectional", "outgoing_only", or "incoming_only".
 
         Returns:
             List of dictionaries containing paths and related nodes.
         """
+        # Build relationship type filter clause
+        rel_type_filter = ""
+        if filter_relationship_types:
+            allowed_types = "', '".join(config.ALLOWED_RELATIONSHIPS)
+            rel_type_filter = f"AND type(r) IN ['{allowed_types}']"
+
         if hops == 1:
-            query = """
+            # Build relationship pattern based on direction
+            if direction == "outgoing_only":
+                rel_pattern = "(start)-[r]->(neighbor:__Entity__)"
+            elif direction == "incoming_only":
+                rel_pattern = "(start)<-[r]-(neighbor:__Entity__)"
+            else:  # bidirectional
+                rel_pattern = "(start)-[r]-(neighbor:__Entity__)"
+
+            query = f"""
             MATCH (start:__Entity__)
             WHERE start.id IN $node_ids
-            OPTIONAL MATCH (start)-[r]-(neighbor:__Entity__)
+            OPTIONAL MATCH {rel_pattern}
+            WHERE neighbor IS NULL OR (neighbor <> start {rel_type_filter})
             RETURN start.id AS source,
                    type(r) AS relationship,
                    neighbor.id AS target,
                    neighbor.description AS target_description,
                    labels(neighbor) AS target_labels
+            LIMIT $limit
             """
         else:  # 2-hop
-            query = """
+            # Build path pattern based on direction
+            if direction == "outgoing_only":
+                path_pattern = "(start)-[*1..2]->(neighbor:__Entity__)"
+            elif direction == "incoming_only":
+                path_pattern = "(start)<-[*1..2]-(neighbor:__Entity__)"
+            else:  # bidirectional
+                path_pattern = "(start)-[*1..2]-(neighbor:__Entity__)"
+
+            # For 2-hop, filter each relationship in the path
+            path_rel_filter = ""
+            if filter_relationship_types:
+                allowed_types = "', '".join(config.ALLOWED_RELATIONSHIPS)
+                path_rel_filter = f"AND ALL(r IN rels WHERE type(r) IN ['{allowed_types}'])"
+
+            query = f"""
             MATCH (start:__Entity__)
             WHERE start.id IN $node_ids
-            OPTIONAL MATCH path = (start)-[*1..2]-(neighbor:__Entity__)
+            OPTIONAL MATCH path = {path_pattern}
             WHERE start <> neighbor
             WITH start, neighbor, relationships(path) AS rels
+            WHERE rels IS NULL OR (size(rels) > 0 {path_rel_filter})
             RETURN DISTINCT
                    start.id AS source,
                    [r IN rels | type(r)] AS relationships,
                    neighbor.id AS target,
                    neighbor.description AS target_description,
                    labels(neighbor) AS target_labels
-            LIMIT 50
+            LIMIT $limit
             """
 
-        results = self.graph.query(query, {"node_ids": node_ids})
+        results = self.graph.query(query, {"node_ids": node_ids, "limit": limit})
         return results
 
     def get_entity_by_text(self, text: str, limit: int = 5) -> List[dict]:

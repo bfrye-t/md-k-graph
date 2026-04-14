@@ -200,11 +200,17 @@ def analyze_query(state: GraphRAGState) -> GraphRAGState:
 def vector_search(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState:
     """
     Node 2: Perform semantic search on document chunks.
+
+    Uses response_mode to determine how many chunks to retrieve.
     """
     query = state["standalone_query"]
+    response_mode = state.get("response_mode", "standard")
+
+    # Get adaptive limit based on response mode
+    k = config.VECTOR_SEARCH_LIMITS.get(response_mode, 5)
 
     try:
-        results = storage.vector_search(query, k=5)
+        results = storage.vector_search(query, k=k)
 
         # Format results for context
         semantic_context = []
@@ -231,16 +237,22 @@ def graph_traverse(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState
     """
     Node 3: Traverse the graph from extracted entities and vector results.
 
-    Uses adaptive hop depth based on query type:
-    - exploratory: 2 hops for richer context
-    - factual/follow_up: 1 hop for focused results
+    Uses adaptive hop depth and limits based on query type and response mode.
     """
     graph_context = []
 
-    # Determine hop depth based on query type
+    # Get query analysis for adaptive retrieval
     query_analysis = state.get("query_analysis", {})
     query_type = query_analysis.get("query_type", "factual")
-    hops = 2 if query_type == "exploratory" else 1
+    response_mode = state.get("response_mode", "standard")
+
+    # Look up traversal configuration
+    traversal_config = config.GRAPH_TRAVERSAL_CONFIG.get(
+        (query_type, response_mode),
+        config.DEFAULT_GRAPH_TRAVERSAL
+    )
+    hops = traversal_config["hops"]
+    limit = traversal_config["limit"]
 
     # Collect node IDs to traverse from
     node_ids = []
@@ -275,8 +287,14 @@ def graph_traverse(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState
 
     if node_ids:
         try:
-            # Perform traversal with adaptive depth
-            traversal_results = storage.graph_traverse(node_ids, hops=hops)
+            # Perform traversal with adaptive parameters
+            traversal_results = storage.graph_traverse(
+                node_ids,
+                hops=hops,
+                limit=limit,
+                filter_relationship_types=config.FILTER_RELATIONSHIP_TYPES,
+                direction=config.TRAVERSAL_DIRECTION,
+            )
 
             for result in traversal_results:
                 if result.get("target"):  # Has a neighbor

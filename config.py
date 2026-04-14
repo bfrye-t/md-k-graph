@@ -48,3 +48,42 @@ ALLOWED_RELATIONSHIPS = [
 VECTOR_INDEX_NAME = "document_embeddings"
 VECTOR_DIMENSION = 1536  # OpenAI text-embedding-3-small dimension
 NODE_LABEL_FOR_VECTORS = "Document"  # We'll also embed chunk nodes
+
+# =============================================================================
+# RETRIEVAL CONFIGURATION
+# =============================================================================
+# Adaptive retrieval parameters based on query type and response mode.
+
+# Vector search limits by response mode
+VECTOR_SEARCH_LIMITS = {
+    "concise": 3,    # Fewer chunks for brief answers
+    "standard": 5,   # Default behavior
+    "detailed": 8,   # More chunks for comprehensive answers
+}
+
+# Graph traversal config: (query_type, response_mode) -> {hops, limit}
+GRAPH_TRAVERSAL_CONFIG = {
+    # Factual queries - focused retrieval
+    ("factual", "concise"): {"hops": 1, "limit": 10},
+    ("factual", "standard"): {"hops": 1, "limit": 25},
+    ("factual", "detailed"): {"hops": 1, "limit": 50},
+    # Exploratory queries - broader context
+    ("exploratory", "concise"): {"hops": 2, "limit": 20},
+    ("exploratory", "standard"): {"hops": 2, "limit": 50},
+    ("exploratory", "detailed"): {"hops": 2, "limit": 100},
+    # Comparison queries - moderate depth, higher limit
+    ("comparison", "concise"): {"hops": 1, "limit": 15},
+    ("comparison", "standard"): {"hops": 2, "limit": 40},
+    ("comparison", "detailed"): {"hops": 2, "limit": 75},
+    # Follow-up queries - similar to factual
+    ("follow_up", "concise"): {"hops": 1, "limit": 10},
+    ("follow_up", "standard"): {"hops": 1, "limit": 25},
+    ("follow_up", "detailed"): {"hops": 2, "limit": 50},
+}
+DEFAULT_GRAPH_TRAVERSAL = {"hops": 1, "limit": 25}
+
+# Whether to filter traversal to only schema-defined relationship types
+FILTER_RELATIONSHIP_TYPES = True
+
+# Traversal direction: "bidirectional", "outgoing_only", "incoming_only"
+TRAVERSAL_DIRECTION = "bidirectional"

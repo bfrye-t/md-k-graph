@@ -28,9 +28,14 @@ Streamlit UI ← LangGraph Agent ← Hybrid Retrieval
 
 **LangGraph Pipeline:**
 1. **Query Analyzer** - Rewrites query, extracts entities, classifies query type (single LLM call)
-2. **Vector Search** - Finds semantically similar document chunks
-3. **Graph Traversal** - Adaptive hops based on query type (1-hop factual, 2-hop exploratory)
+2. **Vector Search** - Finds semantically similar document chunks (adaptive k based on response mode)
+3. **Graph Traversal** - Adaptive hops and limits based on query type + response mode
 4. **Synthesizer** - Generates answer with response mode support
+
+**Adaptive Retrieval:** The system adjusts retrieval parameters based on context:
+- Response mode (concise/standard/detailed) controls semantic chunk count (3/5/8)
+- Query type (factual/exploratory) controls graph traversal depth (1-hop/2-hop) and limits
+- Relationship filtering ensures only schema-defined types are returned
 
 ## Knowledge Graph Schema
 
@@ -125,7 +130,7 @@ Open http://localhost:8501
 
 ```
 ├── app.py                  # Streamlit chat interface
-├── config.py               # Configuration and schema
+├── config.py               # Configuration, schema, and retrieval settings
 ├── src/
 │   ├── ingestion.py        # Markdown loading & chunking
 │   ├── graph_extraction.py # LLM graph extraction

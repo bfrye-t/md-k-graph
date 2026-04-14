@@ -278,9 +278,11 @@ def graph_traverse(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState
             for key in ["h2_header", "h3_header"]:
                 header = ctx.get(key, "")
                 if header:
-                    # Search for matching entities
-                    matches = storage.get_entity_by_text(header, limit=2)
-                    node_ids.extend([m["id"] for m in matches])
+                    # Use resolve_entities for precise matching (avoids description matches)
+                    resolved = storage.resolve_entities([header])
+                    for match in resolved:
+                        if match.get("confidence", 0) >= 0.7:  # Higher threshold for headers
+                            node_ids.append(match["id"])
 
     # Remove duplicates
     node_ids = list(set(node_ids))

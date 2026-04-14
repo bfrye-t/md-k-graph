@@ -171,6 +171,8 @@ for message in st.session_state.messages:
                 st.write(f"**Extracted Entities:** {debug.get('extracted_entities', [])}")
                 st.write(f"**Semantic Results:** {len(debug.get('semantic_context', []))} chunks")
                 st.write(f"**Graph Results:** {len(debug.get('graph_context', []))} relationships")
+                if debug.get("retrieval_boosted"):
+                    st.caption("_Semantic retrieval boosted due to sparse graph results_")
 
                 if debug.get("graph_context"):
                     st.write("**Graph Relationships:**")
@@ -236,6 +238,8 @@ if user_input:
                         st.write(f"**Extracted Entities:** {result.get('extracted_entities', [])}")
                         st.write(f"**Semantic Results:** {len(result.get('semantic_context', []))} chunks")
                         st.write(f"**Graph Results:** {len(result.get('graph_context', []))} relationships")
+                        if result.get("retrieval_boosted"):
+                            st.caption("_Semantic retrieval boosted due to sparse graph results_")
 
                         if result.get("graph_context"):
                             st.write("**Graph Relationships:**")
@@ -252,6 +256,7 @@ if user_input:
                             "extracted_entities": result.get("extracted_entities"),
                             "semantic_context": result.get("semantic_context"),
                             "graph_context": result.get("graph_context"),
+                            "retrieval_boosted": result.get("retrieval_boosted"),
                         }
                     })
 

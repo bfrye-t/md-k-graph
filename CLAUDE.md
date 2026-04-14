@@ -107,7 +107,7 @@ python3 -c "from src.ingestion import load_markdown_files, chunk_documents; docs
 
 ## LangGraph Agent Pipeline
 
-The agent (`src/agent.py`) is a 4-node state machine with multi-turn conversation support:
+The agent (`src/agent.py`) is a 5-node state machine with multi-turn conversation support:
 
 1. **analyze_query** - Consolidated query processing using structured output:
    - Rewrites query resolving pronouns from chat history
@@ -116,7 +116,8 @@ The agent (`src/agent.py`) is a 4-node state machine with multi-turn conversatio
    - Determines if history context is needed for the answer
 2. **vector_search** - Semantic search on Document nodes (adaptive k based on response mode)
 3. **graph_traverse** - Adaptive Cypher traversal (hops and limits based on query type + response mode)
-4. **synthesize** - Generates answer with response mode support (concise/standard/detailed)
+4. **adaptive_boost** - Boosts semantic retrieval when graph results are sparse (< 3 relationships)
+5. **synthesize** - Generates answer with response mode support (concise/standard/detailed)
 
 **State Definition:**
 ```python
@@ -134,6 +135,7 @@ class GraphRAGState(TypedDict):
     # Retrieval
     semantic_context: List[dict]
     graph_context: List[dict]
+    retrieval_boosted: bool          # True if semantic was boosted due to sparse graph
 
     # Output
     final_answer: str
@@ -169,6 +171,8 @@ Retrieval parameters adjust based on query type and response mode (configured in
 Additional settings:
 - `FILTER_RELATIONSHIP_TYPES` - Only return schema-defined relationship types (default: True)
 - `TRAVERSAL_DIRECTION` - Graph traversal direction: bidirectional, outgoing_only, incoming_only (default: bidirectional)
+- `SPARSE_GRAPH_THRESHOLD` - Graph results below this trigger semantic boost (default: 3)
+- `SEMANTIC_BOOST_LIMITS` - Additional chunks fetched when graph is sparse: concise=2, standard=3, detailed=4
 
 ## Environment Variables
 
@@ -193,6 +197,7 @@ EMBEDDING_MODEL=text-embedding-3-small
 - **Response Modes**: Configurable verbosity (concise/standard/detailed) via UI toggle
 - **Entity Resolution**: Multi-strategy matching (exact → normalized → fuzzy) with confidence scores
 - **Adaptive Retrieval**: Vector search k and graph traversal limits adjust based on query type and response mode
+- **Adaptive Fallback**: When graph traversal returns sparse results (<3 relationships), automatically fetches additional semantic chunks
 - **Relationship Filtering**: Graph traversal only returns schema-defined relationship types (configurable)
 - **Consolidated Query Processing**: Single LLM call with structured output replaces separate rewrite + extraction calls
 - **Incremental Updates**: Manifest-based change detection using SHA256 content hashing; only new/modified files are re-processed

@@ -95,6 +95,7 @@ class GraphRAGState(TypedDict):
     # Retrieval
     semantic_context: List[dict]            # Results from vector search
     graph_context: List[dict]               # Results from graph traversal
+    retrieval_boosted: bool                 # Whether semantic retrieval was boosted due to sparse graph
 
     # Output
     final_answer: str                       # Synthesized answer
@@ -343,6 +344,82 @@ def graph_traverse(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState
     return state
 
 
+def adaptive_boost(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState:
+    """
+    Node 3.5: Boost semantic retrieval if graph context is sparse.
+
+    When graph traversal returns few or no relationships, this indicates
+    either the query doesn't map well to graph entities or the entities
+    are poorly connected. In these cases, we compensate by fetching
+    additional semantic chunks to ensure adequate context for synthesis.
+    """
+    graph_context = state.get("graph_context", [])
+    semantic_context = state.get("semantic_context", [])
+    response_mode = state.get("response_mode", "standard")
+
+    # Check if graph context is sparse
+    is_sparse = len(graph_context) < config.SPARSE_GRAPH_THRESHOLD
+
+    if not is_sparse:
+        state["retrieval_boosted"] = False
+        return state
+
+    # Calculate how many additional chunks to fetch
+    boost_k = config.SEMANTIC_BOOST_LIMITS.get(response_mode, 3)
+
+    # We need to fetch more than our original k to get new results
+    original_k = config.VECTOR_SEARCH_LIMITS.get(response_mode, 5)
+    new_k = original_k + boost_k
+
+    try:
+        query = state["standalone_query"]
+        results = storage.vector_search(query, k=new_k)
+
+        # Get existing chunk IDs to avoid duplicates
+        existing_texts = {ctx.get("text", "")[:100] for ctx in semantic_context}
+
+        # Add only new chunks
+        new_chunks = []
+        for doc in results:
+            text = doc.page_content[:2000]
+            text_preview = text[:100]
+
+            # Skip if we already have this chunk
+            if text_preview in existing_texts:
+                continue
+
+            context_item = {
+                "text": text,
+                "doc_title": doc.metadata.get("doc_title", ""),
+                "h2_header": doc.metadata.get("h2_header", ""),
+                "h3_header": doc.metadata.get("h3_header", ""),
+                "similarity_score": doc.metadata.get("similarity_score", 0),
+                "boosted": True,  # Mark as boosted for debugging
+            }
+            new_chunks.append(context_item)
+
+            # Stop when we've added enough
+            if len(new_chunks) >= boost_k:
+                break
+
+        # Merge boosted chunks with existing context
+        if new_chunks:
+            state["semantic_context"] = semantic_context + new_chunks
+            state["retrieval_boosted"] = True
+        else:
+            state["retrieval_boosted"] = False
+
+    except Exception as e:
+        # Don't fail the pipeline on boost errors, just log and continue
+        state["retrieval_boosted"] = False
+        if state.get("error"):
+            state["error"] += f"; Boost error: {str(e)}"
+        else:
+            state["error"] = f"Boost error: {str(e)}"
+
+    return state
+
+
 def synthesize_answer(state: GraphRAGState) -> GraphRAGState:
     """
     Node 4: Synthesize final answer from semantic and graph context.
@@ -421,6 +498,11 @@ def create_graph_rag_agent(storage: GraphStorage):
     """
     Build and compile the LangGraph state machine.
 
+    Pipeline: analyze_query -> vector_search -> graph_traverse -> adaptive_boost -> synthesize
+
+    The adaptive_boost node compensates for sparse graph results by fetching
+    additional semantic context, ensuring adequate information for synthesis.
+
     Args:
         storage: Initialized GraphStorage instance for database access.
 
@@ -434,13 +516,15 @@ def create_graph_rag_agent(storage: GraphStorage):
     workflow.add_node("analyze_query", analyze_query)
     workflow.add_node("vector_search", lambda state: vector_search(state, storage))
     workflow.add_node("graph_traverse", lambda state: graph_traverse(state, storage))
+    workflow.add_node("adaptive_boost", lambda state: adaptive_boost(state, storage))
     workflow.add_node("synthesize", synthesize_answer)
 
     # Define the flow
     workflow.set_entry_point("analyze_query")
     workflow.add_edge("analyze_query", "vector_search")
     workflow.add_edge("vector_search", "graph_traverse")
-    workflow.add_edge("graph_traverse", "synthesize")
+    workflow.add_edge("graph_traverse", "adaptive_boost")
+    workflow.add_edge("adaptive_boost", "synthesize")
     workflow.add_edge("synthesize", END)
 
     # Compile and return
@@ -474,6 +558,7 @@ def run_query(
         "extracted_entities": [],
         "semantic_context": [],
         "graph_context": [],
+        "retrieval_boosted": False,
         "final_answer": "",
         "error": None,
     }

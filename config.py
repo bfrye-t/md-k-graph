@@ -87,3 +87,18 @@ FILTER_RELATIONSHIP_TYPES = True
 
 # Traversal direction: "bidirectional", "outgoing_only", "incoming_only"
 TRAVERSAL_DIRECTION = "bidirectional"
+
+# =============================================================================
+# ADAPTIVE RETRIEVAL FALLBACK
+# =============================================================================
+# When graph traversal returns sparse results, boost semantic retrieval.
+
+# Graph context with fewer relationships than this is considered sparse
+SPARSE_GRAPH_THRESHOLD = 3
+
+# Additional semantic chunks to fetch when graph is sparse
+SEMANTIC_BOOST_LIMITS = {
+    "concise": 2,   # Boost from 3 to 5 total
+    "standard": 3,  # Boost from 5 to 8 total
+    "detailed": 4,  # Boost from 8 to 12 total
+}

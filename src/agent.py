@@ -298,9 +298,15 @@ def graph_traverse(state: GraphRAGState, storage: GraphStorage) -> GraphRAGState
 
             for result in traversal_results:
                 if result.get("target"):  # Has a neighbor
+                    # Handle both 1-hop (relationship) and 2-hop (relationships array)
+                    rel = result.get("relationship")
+                    if rel is None:
+                        rels = result.get("relationships", [])
+                        rel = " -> ".join(rels) if rels else ""
+
                     context_item = {
                         "source": result.get("source", ""),
-                        "relationship": result.get("relationship", ""),
+                        "relationship": rel,
                         "target": result.get("target", ""),
                         "target_description": result.get("target_description", ""),
                         "target_labels": result.get("target_labels", []),
